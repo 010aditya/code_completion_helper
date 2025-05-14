@@ -1,0 +1,23 @@
+{
+    "metadata": {
+      "project": "demo-app",
+      "timestamp": "2025-05-14T18:00:00Z"
+    },
+    "report": [
+      {
+        "filename": "SampleService.java",
+        "legacy_source_path": "src/legacy/com/app/OldService.java",
+        "compilation": "success",
+        "qa_checklist": {
+          "compiles": true,
+          "controller_present": true,
+          "service_separated": true,
+          "dto_used": false,
+          "thymeleaf_ready": false,
+          "manual_review_done": false
+        },
+        "notes": ""
+      }
+    ]
+  }
+  

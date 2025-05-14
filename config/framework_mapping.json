@@ -1,0 +1,6 @@
+{
+    "com.old.framework.BaseAction": "com.migrated.framework.BaseController",
+    "com.legacy.util.DateUtil": "com.migrated.utils.DateUtils",
+    "com.enterprise.framework.ActionForm": "com.migrated.framework.FormDTO"
+  }
+  

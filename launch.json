@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Migration Pipeline",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/cli/migrate.py",
+      "console": "integratedTerminal",
+      "envFile": "${workspaceFolder}/.env",
+      "args": [
+        "--legacy", "legacy_codebase",
+        "--migrated", "migrated_codebase",
+        "--mapping", "mapping.json",
+        "--reference", "reference_apps/promoted"
+      ]
+    }
+  ]
+}
