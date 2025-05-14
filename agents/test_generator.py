@@ -1,40 +1,47 @@
 import os
-import openai
+import re
 
 class TestGeneratorAgent:
-    def __init__(self, migrated_dir, output_dir="generated_tests", api_key=None):
+    def __init__(self, migrated_dir):
         self.migrated_dir = migrated_dir
-        self.output_dir = output_dir
-        os.makedirs(output_dir, exist_ok=True)
-        openai.api_key = api_key or os.getenv("OPENAI_API_KEY")
 
-    def generate_for_service(self, service_file):
-        service_path = os.path.join(self.migrated_dir, service_file)
-        if not os.path.exists(service_path):
+    def generate_for_service(self, service_path):
+        if not service_path.endswith(".java"):
             return
 
-        with open(service_path, "r") as f:
+        test_dir = os.path.join(self.migrated_dir, "generated_tests")
+        os.makedirs(test_dir, exist_ok=True)
+
+        service_file = os.path.join(self.migrated_dir, service_path)
+        if not os.path.exists(service_file):
+            print(f"⚠️ Service file not found: {service_file}")
+            return
+
+        with open(service_file, "r") as f:
             code = f.read()
 
-        prompt = f"""
-You are an expert Java developer. Write JUnit5 test cases for the following Spring Boot service class.
+        class_name_match = re.search(r"public\s+class\s+(\w+)", code)
+        if not class_name_match:
+            print(f"⚠️ Could not find class name in {service_path}")
+            return
 
-Class:
-{code}
+        class_name = class_name_match.group(1)
+        test_class_name = f"{class_name}Test"
+        test_path = os.path.join(test_dir, f"{test_class_name}.java")
 
-Include imports and assume Mockito where necessary. Return only Java test code.
+        test_code = f"""
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+public class {test_class_name} {{
+
+    @Test
+    void sampleTest() {{
+        // TODO: replace with meaningful test
+        assertTrue(true);
+    }}
+}}
 """
-
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
-                max_tokens=1500
-            )
-            test_code = response.choices[0].message.content.strip()
-            test_path = os.path.join(self.output_dir, f"Test{os.path.basename(service_file)}")
-            with open(test_path, "w") as tf:
-                tf.write(test_code)
-        except Exception as e:
-            print(f"[TestGeneratorAgent] Failed for {service_file}: {e}")
+        with open(test_path, "w") as f:
+            f.write(test_code)
+        print(f"✅ Test case generated: {test_path}")

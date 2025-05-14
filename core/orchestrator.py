@@ -4,7 +4,6 @@ import glob
 from dotenv import load_dotenv
 load_dotenv()
 
-# Allow sibling module imports
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from agents.fix_and_compile import FixAndCompileAgent
@@ -22,19 +21,20 @@ from agents.rag_context_retriever import RAGContextRetrieverAgent
 from agents.jsp_to_thymeleaf_converter import JspToThymeleafConverterAgent
 from agents.struts_to_spring_controller import StrutsToSpringControllerAgent
 from agents.metadata_agent import MetadataAgent
+from agents.build_fixer import BuildFixerAgent
+from agents.build_gradle_handler import BuildGradleHandler
+
+import json
 
 def find_java_root(base_path):
-    """Find src/main/java/ path if exists"""
     java_path = os.path.join(base_path, "src", "main", "java")
     return java_path if os.path.exists(java_path) else base_path
 
 def find_thymeleaf_root(base_path):
-    """Find src/main/resources/templates/ path if exists"""
     tpl_path = os.path.join(base_path, "src", "main", "resources", "templates")
     return tpl_path if os.path.exists(tpl_path) else os.path.join(base_path, "templates")
 
 def find_jsp_input_dir(base_path):
-    """Try common JSP locations"""
     candidates = [
         os.path.join(base_path, "webapp"),
         os.path.join(base_path, "src", "main", "webapp"),
@@ -44,6 +44,38 @@ def find_jsp_input_dir(base_path):
         if os.path.exists(path):
             return path
     return None
+
+def write_migration_report(mappings, migrated_code_root):
+    report_dir = os.path.join(migrated_code_root, "data")
+    os.makedirs(report_dir, exist_ok=True)
+    report_path = os.path.join(report_dir, "migration_report.json")
+    report_entries = []
+    for m in mappings:
+        if "mapping.json" in m.get("targetPath", ""):
+            continue
+        entry = {
+            "filename": os.path.basename(m.get("targetPath", "")),
+            "legacy_source_path": m.get("sourcePath", "N/A"),
+            "target_path": m.get("targetPath", "N/A"),
+            "compilation": "pending",
+            "build_fixer_attempted": False,
+            "gpt_fix_attempted": False,
+            "fix_status": "not_attempted",
+            "fix_log": {},
+            "qa_checklist": {
+                "compiles": False,
+                "controller_present": False,
+                "service_separated": False,
+                "dto_used": False,
+                "thymeleaf_ready": False,
+                "manual_review_done": False
+            },
+            "notes": ""
+        }
+        report_entries.append(entry)
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump({"report": report_entries, "metadata": {"generated_at": "auto"}}, f, indent=2)
+    print(f"📄 Migration report written to {report_path}")
 
 def run_migration_pipeline(legacy_dir, migrated_dir, mapping_path, reference_dir):
     migrated_code_root = find_java_root(migrated_dir)
@@ -88,8 +120,15 @@ def run_migration_pipeline(legacy_dir, migrated_dir, mapping_path, reference_dir
     for m in mappings:
         fixer.fix_file(m["targetPath"], stitcher)
 
+    print("🛠️ Ensuring build.gradle is correct...")
+    BuildGradleHandler(legacy_dir, migrated_code_root).ensure_gradle_file()
+
     print("🧪 Validating compiled output...")
     results = BuildValidatorAgent(migrated_code_root).validate()
+
+    if results.get("status") == "fail":
+        print("🛠 Trying to fix build.gradle issues...")
+        BuildFixerAgent(legacy_dir, migrated_code_root).run()
 
     print("🔁 Retrying failed GPT fixes...")
     RetryAgent("logs/fix_history", legacy_dir, migrated_code_root).retry_all_failures()
@@ -109,5 +148,7 @@ def run_migration_pipeline(legacy_dir, migrated_dir, mapping_path, reference_dir
 
     print("📡 Indexing embeddings for promoted references...")
     EmbeddingIndexerAgent(reference_dir).index_all()
+
+    write_migration_report(mappings, migrated_code_root)
 
     print("✅ Migration pipeline complete.")

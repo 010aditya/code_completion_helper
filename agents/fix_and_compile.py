@@ -1,55 +1,104 @@
 import os
-import openai
-from agents.fix_logger import FixHistoryLogger
+import json
+from openai import OpenAI
 from agents.context_stitcher import ContextStitcherAgent
 
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 class FixAndCompileAgent:
-    def __init__(self, legacy_dir, migrated_dir, api_key=None):
+    def __init__(self, legacy_dir, migrated_dir):
         self.legacy_dir = legacy_dir
         self.migrated_dir = migrated_dir
-        self.fix_logger = FixHistoryLogger()
-        openai.api_key = api_key or os.getenv("OPENAI_API_KEY")
 
-    def fix_file(self, filename, context_stitcher: ContextStitcherAgent):
-        file_path = os.path.join(self.migrated_dir, filename)
-        legacy_context = context_stitcher.get_stitched_context(filename)
+    def fix_file(self, target_path, stitcher: ContextStitcherAgent):
+        assert self.legacy_dir not in target_path, "❌ Attempted to write to legacy directory. Aborting."
 
-        try:
-            with open(file_path, "r") as f:
-                migrated_code = f.read()
-        except Exception as e:
-            print(f"[FixAndCompileAgent] Error reading {filename}: {e}")
-            return False
+        migrated_file_path = os.path.join(self.migrated_dir, target_path)
 
-        prompt = f"""
-You are an expert Java developer. Given the migrated but broken Java class below,
-fix it to be fully functional and compilable. Use the legacy context provided to
-restore missing methods and references.
+        if not os.path.exists(migrated_file_path):
+            print(f"❌ File not found: {migrated_file_path}")
+            return {"fix_log": {"file_missing": True}, "fixed_code": ""}
 
-LEGACY CONTEXT:
+        # Step 1: Read migrated code
+        with open(migrated_file_path, "r", encoding="utf-8") as f:
+            original_code = f.read()
+
+        # Step 2: Get legacy context
+        legacy_context = stitcher.get_context_for_file(target_path)
+
+        # Step 3: GPT Prompt
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert Java migration assistant. Fix compilation issues in migrated code "
+                    "using the legacy context and ensure clean, idiomatic Spring Boot architecture."
+                )
+            },
+            {
+                "role": "user",
+                "content": f"""
+Legacy context (from original Java class or related files):
+```
 {legacy_context}
+```
 
-MIGRATED CODE TO FIX:
-{migrated_code}
+Broken migrated code:
+```
+{original_code}
+```
 
-RETURN ONLY VALID JAVA CODE.
+Please:
+1. Fix all compilation issues
+2. Add missing method stubs if needed
+3. Ensure all injections (`@Autowired`, etc.) are present
+4. Return:
+```json
+{{
+  "missing_method": true,
+  "injection_resolved": true,
+  "field_type_fix": false,
+  "generated_stub": true
+}}
+```
+Then provide the fixed Java code.
 """
+            }
+        ]
+
+        # Step 4: Call OpenAI
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            temperature=0.2
+        )
+
+        output = response.choices[0].message.content.strip()
+
+        # Step 5: Parse GPT response
+        fix_log = {}
+        fixed_code = ""
 
         try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0,
-                max_tokens=3000
-            )
-            fixed_code = response.choices[0].message.content.strip()
-            with open(file_path, "w") as f:
-                f.write(fixed_code)
-            self.fix_logger.log_fix(filename, migrated_code, fixed_code, success=True)
-            print(f"[FixAndCompileAgent] Fixed {filename}")
-            return True
-
+            if output.startswith("{") and "missing_method" in output:
+                json_part, rest = output.split("```", 1)
+                fix_log = json.loads(json_part)
+                fixed_code = rest.split("```")[-2].strip()
+            else:
+                fixed_code = output
+                fix_log = {"gpt_format_unstructured": True}
         except Exception as e:
-            print(f"[FixAndCompileAgent] GPT fix failed for {filename}: {e}")
-            self.fix_logger.log_fix(filename, migrated_code, migrated_code, success=False)
-            return False
+            print("⚠️ Failed to parse structured GPT fix output. Defaulting to raw code.")
+            fixed_code = output
+            fix_log = {"gpt_parse_error": True}
+
+        # Step 6: Compare and log
+        if original_code.strip() == fixed_code.strip():
+            fix_log["gpt_no_change"] = True
+
+        # Step 7: Save fixed code
+        with open(migrated_file_path, "w", encoding="utf-8") as f:
+            f.write(fixed_code)
+
+        print(f"✅ Fixed {target_path}")
+        return {"fix_log": fix_log, "fixed_code": fixed_code}
