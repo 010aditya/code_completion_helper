@@ -1,5 +1,8 @@
 openai
 streamlit
+python-dotenv
 sentence-transformers
 scikit-learn
+faiss-cpu
 javalang
+tqdm
